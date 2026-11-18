@@ -1,4 +1,4 @@
-# 江山 · Compose Multiplatform 重写（里程碑 1）
+# 江山 · Compose Multiplatform 重写
 
 这是用 Kotlin/Compose Multiplatform 重写的实验版本；原来的 Java/View 版本保留在 `../jiangshan-android`，随时可切回。
 
