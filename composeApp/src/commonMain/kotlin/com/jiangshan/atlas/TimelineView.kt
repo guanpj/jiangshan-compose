@@ -32,6 +32,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -283,8 +284,9 @@ fun Timeline(
                                 scroll.scroll(MutatePriority.PreventUserInput) { awaitCancellation() }
                             }
                             down.consume()
-                            val y0 = down.position.y.coerceIn(minCursor, maxCursor)
-                            cursorFrac = ((y0 - minCursor) / (maxCursor - minCursor))
+                            val liveMax = (cardHNow.value - endPad).coerceAtLeast(minCursor)
+                            val y0 = down.position.y.coerceIn(minCursor, liveMax)
+                            cursorFrac = ((y0 - minCursor) / (liveMax - minCursor))
                                 .coerceIn(0f, 1f)
                             val yv = yearUnderCursor()
                             state.lastYear = yv
@@ -304,7 +306,6 @@ fun Timeline(
                                 if (baseDist == 0f) {
                                     baseDist = d
                                     basePx = pxNow.value
-                                    pinchYear = layoutNow.value.yearAt(scroll.value + cursorY)
                                     state.pinching = true
                                     scrollBlock?.cancel()
                                     scrollBlock = scope.launch {
@@ -324,8 +325,10 @@ fun Timeline(
                                 event.changes.forEach { it.consume() }
                             } else if (dragging) {
                                 val c = pressed.first()
-                                val cy = c.position.y.coerceIn(minCursor, maxCursor)
-                                cursorFrac = ((cy - minCursor) / (maxCursor - minCursor))
+                                val liveMax = (cardHNow.value - endPad)
+                                    .coerceAtLeast(minCursor)
+                                val cy = c.position.y.coerceIn(minCursor, liveMax)
+                                cursorFrac = ((cy - minCursor) / (liveMax - minCursor))
                                     .coerceIn(0f, 1f)
                                 val yv = yearUnderCursor()
                                 state.lastYear = yv
@@ -355,30 +358,15 @@ fun Timeline(
                         if (baseDist > 0f) {
                             scrollBlock?.cancel()
                             scrollBlock = null
-                            if (pinchYear != Int.MIN_VALUE) {
-                                scope.launch {
-                                    try {
-                                        val nl = buildLayout(data, pxNow.value, topPad, minBandPx)
-                                        val tgt = (nl.yOf(pinchYear) - cursorY).coerceIn(
-                                            0f,
-                                            (nl.contentH + endPad - cardHNow.value)
-                                                .coerceAtLeast(0f),
-                                        )
-                                        scroll.scrollTo(tgt.toInt())
-                                        val yv = nl.yearAt(scroll.value + cursorY)
-                                        state.lastYear = yv
-                                        if (yv != yearNow.value) onYear(yv)
-                                    } finally {
-                                        state.pinching = false
-                                    }
-                                }
-                            } else {
-                                state.pinching = false
-                            }
+                            state.pinching = false
+                            val yv = yearUnderCursor()
+                            state.lastYear = yv
+                            if (yv != yearNow.value) onYear(yv)
                         }
                         if (tapCandidate && baseDist == 0f && moved <= 8.dp.toPx()) {
-                            val ty = down.position.y.coerceIn(minCursor, maxCursor)
-                            cursorFrac = ((ty - minCursor) / (maxCursor - minCursor))
+                            val liveMax = (cardHNow.value - endPad).coerceAtLeast(minCursor)
+                            val ty = down.position.y.coerceIn(minCursor, liveMax)
+                            cursorFrac = ((ty - minCursor) / (liveMax - minCursor))
                                 .coerceIn(0f, 1f)
                             val yv = yearUnderCursor()
                             state.lastYear = yv
@@ -399,14 +387,6 @@ fun Timeline(
                 }
             }
             Canvas(Modifier.fillMaxSize()) {
-                // same padding as the list start/end, kept visible while zoomed
-                val paper = Color(0xFFF4EFE5)
-                drawRect(paper, topLeft = Offset.Zero, size = Size(size.width, topPad))
-                drawRect(
-                    paper,
-                    topLeft = Offset(0f, (size.height - endPad).coerceAtLeast(0f)),
-                    size = Size(size.width, endPad),
-                )
                 drawRoundRect(
                     color = Color(0x1F2B2622),
                     topLeft = Offset(0.5.dp.toPx(), 0.5.dp.toPx()),

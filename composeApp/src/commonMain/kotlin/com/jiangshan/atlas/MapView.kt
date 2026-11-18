@@ -8,8 +8,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -115,6 +117,11 @@ private class TileStore(private val scope: CoroutineScope) {
     }
 }
 
+class MapFocus(
+    val token: Int,
+    val coords: List<FloatArray>,
+)
+
 @Composable
 fun AtlasMap(
     data: AtlasData,
@@ -124,6 +131,7 @@ fun AtlasMap(
     modifier: Modifier = Modifier,
     debugSweep: Boolean = false,
     debugFit: Boolean = false,
+    focus: MapFocus? = null,
 ) {
     val projector = remember { Projector() }
     val layers = remember(snap) { buildLayers(data, snap, projector) }
@@ -159,6 +167,47 @@ fun AtlasMap(
             else camX.coerceIn(halfW, Projector.W - halfW)
             camY = if (halfH >= Projector.H / 2f) Projector.H / 2f
             else camY.coerceIn(halfH, Projector.H - halfH)
+        }
+
+        LaunchedEffect(focus?.token, w, h) {
+            val f = focus ?: return@LaunchedEffect
+            if (scale <= 0f) return@LaunchedEffect
+            val pts = f.coords.mapNotNull { c ->
+                if (c.size < 2) null else
+                    projector.x(c[0].toDouble()) to projector.y(c[1].toDouble())
+            }
+            if (pts.isEmpty()) return@LaunchedEffect
+            val minX = pts.minOf { it.first }
+            val maxX = pts.maxOf { it.first }
+            val minY = pts.minOf { it.second }
+            val maxY = pts.maxOf { it.second }
+            val cx = (minX + maxX) / 2f
+            val cy = (minY + maxY) / 2f
+            val spanX = (maxX - minX).coerceAtLeast(1f)
+            val spanY = (maxY - minY).coerceAtLeast(1f)
+            val target = (
+                if (pts.size == 1) w / 410f
+                else min(w / (spanX * 2.4f), h / (spanY * 3.2f))
+            ).coerceIn(minScale, maxScale)
+            val hw = w / (2f * target)
+            val hh = h / (2f * target)
+            val tcx = if (hw >= Projector.W / 2f) Projector.W / 2f
+            else cx.coerceIn(hw, Projector.W - hw)
+            val tcy = if (hh >= Projector.H / 2f) Projector.H / 2f
+            else cy.coerceIn(hh, Projector.H - hh)
+            val s0 = scale
+            val x0 = camX
+            val y0 = camY
+            val steps = 22
+            for (i in 1..steps) {
+                kotlinx.coroutines.delay(16)
+                val t = i / steps.toFloat()
+                val e = 1f - (1f - t) * (1f - t) * (1f - t)
+                scale = s0 + (target - s0) * e
+                camX = x0 + (tcx - x0) * e
+                camY = y0 + (tcy - y0) * e
+                clamp()
+            }
         }
 
         if (debugSweep) {
@@ -429,6 +478,26 @@ fun AtlasMap(
                 if (idx < 0) return@forEach
                 placed.add(rects[idx])
                 drawText(layout, topLeft = cands[idx])
+            }
+            focus?.coords?.forEach { c ->
+                if (c.size < 2) return@forEach
+                val wx = projector.x(c[0].toDouble())
+                val wy = projector.y(c[1].toDouble())
+                val sx = (wx - camX) * scale + size.width / 2f
+                val sy = (wy - camY) * scale + size.height / 2f
+                if (sx > -40f && sx < size.width + 40f && sy > -40f && sy < size.height + 40f) {
+                    drawCircle(
+                        color = Color(0xCCB5452F),
+                        radius = 9.dp.toPx(),
+                        center = Offset(sx, sy),
+                        style = Stroke(width = 2.dp.toPx()),
+                    )
+                    drawCircle(
+                        color = Color(0xFFB5452F),
+                        radius = 3.2.dp.toPx(),
+                        center = Offset(sx, sy),
+                    )
+                }
             }
         }
     }

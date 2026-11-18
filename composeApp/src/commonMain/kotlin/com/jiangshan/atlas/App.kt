@@ -99,9 +99,14 @@ private fun MapScreen(data: AtlasData, zoomSweep: Boolean = false, zoomFit: Bool
     // the timeline is moving, so the map isn't rebuilt on every drag frame
     var year by remember { mutableIntStateOf(startYear) }
     var scrubYear by remember { mutableIntStateOf(startYear) }
-    LaunchedEffect(scrubYear) {
-        delay(120)
-        year = scrubYear
+    // live-ish linkage while scrubbing: commit the map/event year on a fixed
+    // cadence (not every frame), so dragging the cursor updates the map without
+    // rebuilding it 60 times a second
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(200)
+            if (year != scrubYear) year = scrubYear
+        }
     }
     val dynasty = remember(year) { data.dynastyFor(year) }
     val snapKey = remember(dynasty, year) { data.snapshotKey(dynasty, year) }
@@ -113,6 +118,8 @@ private fun MapScreen(data: AtlasData, zoomSweep: Boolean = false, zoomFit: Bool
     val scrubSnap = scrubSnapKey?.let { data.snapshots[it] }
     var eventsOpen by remember { mutableStateOf(true) }
     var selectedEvent by remember(dynasty.key) { mutableIntStateOf(-1) }
+    var focusToken by remember { mutableIntStateOf(0) }
+    var mapFocus by remember { mutableStateOf<MapFocus?>(null) }
 
     // hoisted so portrait <-> landscape keeps the same ruler and event list state
     val timelineState = remember { TimelineState() }
@@ -146,6 +153,7 @@ private fun MapScreen(data: AtlasData, zoomSweep: Boolean = false, zoomFit: Bool
             modifier = Modifier.fillMaxSize(),
             debugSweep = zoomSweep,
             debugFit = zoomFit,
+            focus = mapFocus,
         )
 
         Column(
@@ -228,7 +236,7 @@ private fun MapScreen(data: AtlasData, zoomSweep: Boolean = false, zoomFit: Bool
                     debugSpan = timelineSpan,
                     modifier = Modifier.fillMaxHeight().shadow(10.dp, RoundedCornerShape(18.dp)),
                     state = timelineState,
-                    onYear = { scrubYear = it },
+                    onYear = { scrubYear = it; mapFocus = null },
                 )
             }
 
@@ -240,6 +248,11 @@ private fun MapScreen(data: AtlasData, zoomSweep: Boolean = false, zoomFit: Bool
                     onToggle = { eventsOpen = false },
                     onPick = { index, y ->
                         selectedEvent = index
+                        val ev = dynasty.events.getOrNull(index)
+                        if (ev != null && ev.hasCoord) {
+                            focusToken += 1
+                            mapFocus = MapFocus(focusToken, ev.allCoords)
+                        }
                         scrubYear = y
                         year = y
                     },
@@ -276,7 +289,7 @@ private fun MapScreen(data: AtlasData, zoomSweep: Boolean = false, zoomFit: Bool
                     debugSpan = timelineSpan,
                     modifier = Modifier.fillMaxHeight().shadow(10.dp, RoundedCornerShape(18.dp)),
                     state = timelineState,
-                    onYear = { scrubYear = it },
+                    onYear = { scrubYear = it; mapFocus = null },
                 )
             }
 
@@ -293,6 +306,11 @@ private fun MapScreen(data: AtlasData, zoomSweep: Boolean = false, zoomFit: Bool
                     onToggle = { eventsOpen = false },
                     onPick = { index, y ->
                         selectedEvent = index
+                        val ev = dynasty.events.getOrNull(index)
+                        if (ev != null && ev.hasCoord) {
+                            focusToken += 1
+                            mapFocus = MapFocus(focusToken, ev.allCoords)
+                        }
                         scrubYear = y
                         year = y
                     },

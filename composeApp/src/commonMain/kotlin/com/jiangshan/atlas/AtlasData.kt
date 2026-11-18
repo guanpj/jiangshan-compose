@@ -19,7 +19,16 @@ class AtlasEvent(
     val year: Int,
     val headline: String,
     val site: String,
-)
+    val lon: Float = Float.NaN,
+    val lat: Float = Float.NaN,
+    val siteCoords: List<FloatArray> = emptyList(),
+) {
+    val hasCoord: Boolean get() = !lon.isNaN() && !lat.isNaN()
+
+    val allCoords: List<FloatArray>
+        get() = if (siteCoords.isNotEmpty()) siteCoords
+        else if (hasCoord) listOf(floatArrayOf(lon, lat)) else emptyList()
+}
 
 class Dynasty(
     val key: String,
@@ -133,10 +142,35 @@ class AtlasData(
                         .map { it.jsonPrimitive.int }.toIntArray(),
                     events = (o["ev"]?.jsonArray ?: JsonArray(emptyList())).map { row ->
                         val a = row.jsonArray
+                        val coord = a.getOrNull(3)?.let { c ->
+                            runCatching {
+                                val arr = c.jsonArray
+                                floatArrayOf(
+                                    arr[0].jsonPrimitive.content.toFloat(),
+                                    arr[1].jsonPrimitive.content.toFloat(),
+                                )
+                            }.getOrNull()
+                        }
+                        val sites = a.getOrNull(4)?.let { c ->
+                            runCatching {
+                                c.jsonArray.mapNotNull { el ->
+                                    runCatching {
+                                        val arr = el.jsonArray
+                                        floatArrayOf(
+                                            arr[0].jsonPrimitive.content.toFloat(),
+                                            arr[1].jsonPrimitive.content.toFloat(),
+                                        )
+                                    }.getOrNull()
+                                }
+                            }.getOrNull()
+                        } ?: emptyList()
                         AtlasEvent(
                             year = a.getOrNull(0)?.jsonPrimitive?.intOrNull ?: 0,
                             headline = a.getOrNull(1)?.jsonPrimitive?.contentOrNull ?: "",
                             site = a.getOrNull(2)?.jsonPrimitive?.contentOrNull ?: "",
+                            lon = coord?.get(0) ?: Float.NaN,
+                            lat = coord?.get(1) ?: Float.NaN,
+                            siteCoords = sites,
                         )
                     },
                 )
