@@ -29,6 +29,9 @@ kotlin {
             implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
             implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
         }
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+        }
         androidMain.dependencies {
             implementation("androidx.activity:activity-compose:1.10.1")
         }

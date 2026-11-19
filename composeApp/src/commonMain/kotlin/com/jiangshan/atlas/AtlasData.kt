@@ -48,6 +48,8 @@ class Dynasty(
     }
 }
 
+internal data class EventSelection(val dynasty: Dynasty, val event: AtlasEvent)
+
 class Feature(
     val title: String,
     val role: String,
@@ -112,6 +114,20 @@ class AtlasData(
     val hydroLakes: List<HydroLake>,
     val hydroLabels: List<HydroLabel>,
 ) {
+    private val chronologicalEvents = dynasties.flatMap { dynasty ->
+        dynasty.events.map { EventSelection(dynasty, it) }
+    }.sortedBy { it.event.year }
+
+    internal fun eventAtOrBefore(year: Int): EventSelection? =
+        chronologicalEvents.lastOrNull { it.event.year <= year }
+
+    fun initialYear(requested: Int): Int =
+        if (requested != 0 && requested in dynasties.first().from..dynasties.last().to) {
+            requested
+        } else {
+            dynasties.first().focus
+        }
+
     fun dynastyFor(year: Int): Dynasty = dynasties.last { year >= it.from }
 
     fun snapshotKey(dynasty: Dynasty, year: Int): String? = dynasty.snapFor(year)

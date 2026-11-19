@@ -16,25 +16,19 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.runtime.rememberCoroutineScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlin.math.roundToInt
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -46,23 +40,27 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
 internal val Paper = Color(0xFFF3EEE4)
@@ -93,13 +91,11 @@ fun App(zoomSweep: Boolean = false, zoomFit: Boolean = false, timelineSpan: Int 
 
 @Composable
 private fun MapScreen(data: AtlasData, zoomSweep: Boolean = false, zoomFit: Boolean = false, timelineSpan: Int = 0, initialYear: Int = Int.MIN_VALUE) {
-    val startYear =
-        if (initialYear != Int.MIN_VALUE) initialYear else data.dynasties.first().focus
-    // committed year drives the map/event list; scrubYear drives the header while
-    // the timeline is moving, so the map isn't rebuilt on every drag frame
+    val startYear = data.initialYear(initialYear)
+    // The header and event selection follow the cursor. The map updates at a lower rate.
     var year by remember { mutableIntStateOf(startYear) }
     var scrubYear by remember { mutableIntStateOf(startYear) }
-    // live-ish linkage while scrubbing: commit the map/event year on a fixed
+    // live-ish linkage while scrubbing: commit the map year on a fixed
     // cadence (not every frame), so dragging the cursor updates the map without
     // rebuilding it 60 times a second
     LaunchedEffect(Unit) {
@@ -117,22 +113,35 @@ private fun MapScreen(data: AtlasData, zoomSweep: Boolean = false, zoomFit: Bool
     }
     val scrubSnap = scrubSnapKey?.let { data.snapshots[it] }
     var eventsOpen by remember { mutableStateOf(true) }
-    var selectedEvent by remember(dynasty.key) { mutableIntStateOf(-1) }
+    var selection by remember(data, startYear) { mutableStateOf(data.eventAtOrBefore(startYear)) }
+    val eventsDynasty = selection?.dynasty ?: scrubDynasty
+    val selectedIndex = remember(eventsDynasty, selection) {
+        eventsDynasty.events.indexOf(selection?.event)
+    }
     var focusToken by remember { mutableIntStateOf(0) }
     var mapFocus by remember { mutableStateOf<MapFocus?>(null) }
+    val onTimelineYear: (Int) -> Unit = { pickedYear ->
+        scrubYear = pickedYear
+        selection = data.eventAtOrBefore(pickedYear)
+        mapFocus = null
+    }
+    val onEventPick: (AtlasEvent) -> Unit = { event ->
+        selection = EventSelection(eventsDynasty, event)
+        focusToken += 1
+        val coords = event.allCoords
+        mapFocus = if (coords.isNotEmpty()) {
+            MapFocus(focusToken, coords)
+        } else {
+            null
+        }
+        scrubYear = event.year
+        year = event.year
+    }
 
     // hoisted so portrait <-> landscape keeps the same ruler and event list state
     val timelineState = remember { TimelineState() }
     val panelListState = rememberLazyListState()
     val drawerListState = rememberLazyListState()
-    var eventsDynastyKey by remember { mutableStateOf(dynasty.key) }
-    LaunchedEffect(dynasty.key) {
-        if (dynasty.key != eventsDynastyKey) {
-            eventsDynastyKey = dynasty.key
-            panelListState.scrollToItem(0)
-            drawerListState.scrollToItem(0)
-        }
-    }
 
     val safe = WindowInsets.safeDrawing.asPaddingValues()
     val direction = LocalLayoutDirection.current
@@ -144,6 +153,16 @@ private fun MapScreen(data: AtlasData, zoomSweep: Boolean = false, zoomFit: Bool
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val portrait = maxHeight >= maxWidth
         val headerH = if (portrait) 76.dp else 44.dp
+
+        if (eventsOpen) {
+            FollowSelectedEvent(
+                listState = if (portrait) panelListState else drawerListState,
+                dynastyKey = eventsDynasty.key,
+                selectedIndex = selectedIndex,
+                pickToken = focusToken,
+                estimatedSize = if (portrait) 212.dp else 64.dp,
+            )
+        }
 
         AtlasMap(
             data = data,
@@ -236,26 +255,17 @@ private fun MapScreen(data: AtlasData, zoomSweep: Boolean = false, zoomFit: Bool
                     debugSpan = timelineSpan,
                     modifier = Modifier.fillMaxHeight().shadow(10.dp, RoundedCornerShape(18.dp)),
                     state = timelineState,
-                    onYear = { scrubYear = it; mapFocus = null },
+                    onYear = onTimelineYear,
                 )
             }
 
             if (eventsOpen) {
                 EventPanel(
-                    dynasty = dynasty,
-                    selected = selectedEvent,
+                    dynasty = eventsDynasty,
+                    selected = selection?.event,
                     listState = panelListState,
                     onToggle = { eventsOpen = false },
-                    onPick = { index, y ->
-                        selectedEvent = index
-                        val ev = dynasty.events.getOrNull(index)
-                        if (ev != null && ev.hasCoord) {
-                            focusToken += 1
-                            mapFocus = MapFocus(focusToken, ev.allCoords)
-                        }
-                        scrubYear = y
-                        year = y
-                    },
+                    onPick = onEventPick,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(
@@ -289,7 +299,7 @@ private fun MapScreen(data: AtlasData, zoomSweep: Boolean = false, zoomFit: Bool
                     debugSpan = timelineSpan,
                     modifier = Modifier.fillMaxHeight().shadow(10.dp, RoundedCornerShape(18.dp)),
                     state = timelineState,
-                    onYear = { scrubYear = it; mapFocus = null },
+                    onYear = onTimelineYear,
                 )
             }
 
@@ -300,20 +310,11 @@ private fun MapScreen(data: AtlasData, zoomSweep: Boolean = false, zoomFit: Bool
                 modifier = Modifier.align(Alignment.CenterStart),
             ) {
                 EventDrawer(
-                    dynasty = dynasty,
-                    selected = selectedEvent,
+                    dynasty = eventsDynasty,
+                    selected = selection?.event,
                     listState = drawerListState,
                     onToggle = { eventsOpen = false },
-                    onPick = { index, y ->
-                        selectedEvent = index
-                        val ev = dynasty.events.getOrNull(index)
-                        if (ev != null && ev.hasCoord) {
-                            focusToken += 1
-                            mapFocus = MapFocus(focusToken, ev.allCoords)
-                        }
-                        scrubYear = y
-                        year = y
-                    },
+                    onPick = onEventPick,
                     modifier = Modifier
                         .padding(
                             start = leftInset + 6.dp,
@@ -344,17 +345,37 @@ private fun MapScreen(data: AtlasData, zoomSweep: Boolean = false, zoomFit: Bool
 }
 
 @Composable
+private fun FollowSelectedEvent(
+    listState: LazyListState,
+    dynastyKey: String,
+    selectedIndex: Int,
+    pickToken: Int,
+    estimatedSize: Dp,
+) {
+    val estimatedPx = with(LocalDensity.current) { estimatedSize.roundToPx() }
+    LaunchedEffect(listState, dynastyKey, selectedIndex, pickToken, estimatedPx) {
+        if (selectedIndex < 0) {
+            listState.scrollToItem(0)
+            return@LaunchedEffect
+        }
+        val layout = snapshotFlow { listState.layoutInfo }.first {
+            it.totalItemsCount > selectedIndex && it.viewportEndOffset > it.viewportStartOffset
+        }
+        val itemSize = layout.visibleItemsInfo.firstOrNull { it.index == selectedIndex }?.size ?: estimatedPx
+        val centeredOffset = (layout.viewportStartOffset + layout.viewportEndOffset - itemSize) / 2
+        listState.animateScrollToItem(selectedIndex, -centeredOffset)
+    }
+}
+
+@Composable
 private fun EventPanel(
     dynasty: Dynasty,
-    selected: Int,
+    selected: AtlasEvent?,
     listState: LazyListState,
     onToggle: () -> Unit,
-    onPick: (Int, Int) -> Unit,
+    onPick: (AtlasEvent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val scope = rememberCoroutineScope()
-    val density = LocalDensity.current
-
     Column(
         modifier
             .shadow(10.dp, RoundedCornerShape(12.dp))
@@ -378,8 +399,8 @@ private fun EventPanel(
             contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 2.dp, bottom = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            itemsIndexed(dynasty.events) { index, e ->
-                val isSelected = index == selected
+            items(dynasty.events) { e ->
+                val isSelected = e === selected
                 Column(
                     Modifier
                         .width(212.dp)
@@ -392,18 +413,8 @@ private fun EventPanel(
                             if (isSelected) Color(0xB3B5452F) else Color(0x222B2622),
                             RoundedCornerShape(10.dp),
                         )
-                        .clickable {
-                            onPick(index, e.year)
-                            scope.launch {
-                                val info = listState.layoutInfo.visibleItemsInfo
-                                    .firstOrNull { it.index == index }
-                                val itemPx = info?.size?.toFloat()
-                                    ?: with(density) { 212.dp.toPx() }
-                                val viewport = listState.layoutInfo.viewportSize.width
-                                val center = ((viewport - itemPx) / 2f).roundToInt()
-                                listState.animateScrollToItem(index, -center)
-                            }
-                        }
+                        .semantics { this.selected = isSelected }
+                        .clickable { onPick(e) }
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
@@ -451,15 +462,12 @@ private fun EventPill(onOpen: () -> Unit) {
 @Composable
 private fun EventDrawer(
     dynasty: Dynasty,
-    selected: Int,
+    selected: AtlasEvent?,
     listState: LazyListState,
     onToggle: () -> Unit,
-    onPick: (Int, Int) -> Unit,
+    onPick: (AtlasEvent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val scope = rememberCoroutineScope()
-    val density = LocalDensity.current
-
     Column(
         modifier
             .shadow(12.dp, RoundedCornerShape(16.dp))
@@ -482,8 +490,8 @@ private fun EventDrawer(
             contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = 2.dp, bottom = 8.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            itemsIndexed(dynasty.events) { index, e ->
-                val isSelected = index == selected
+            items(dynasty.events) { e ->
+                val isSelected = e === selected
                 Column(
                     Modifier
                         .fillMaxWidth()
@@ -496,18 +504,8 @@ private fun EventDrawer(
                             if (isSelected) Color(0xB3B5452F) else Color(0x222B2622),
                             RoundedCornerShape(10.dp),
                         )
-                        .clickable {
-                            onPick(index, e.year)
-                            scope.launch {
-                                val info = listState.layoutInfo.visibleItemsInfo
-                                    .firstOrNull { it.index == index }
-                                val itemPx = info?.size?.toFloat()
-                                    ?: with(density) { 64.dp.toPx() }
-                                val viewport = listState.layoutInfo.viewportSize.height
-                                val center = ((viewport - itemPx) / 2f).roundToInt()
-                                listState.animateScrollToItem(index, -center)
-                            }
-                        }
+                        .semantics { this.selected = isSelected }
+                        .clickable { onPick(e) }
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {

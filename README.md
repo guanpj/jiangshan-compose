@@ -45,6 +45,8 @@ iOS：
 
 ## 构建
 
+使用 JDK 17 或更高版本。Android SDK 位置可由 Android Studio 写入本地 `local.properties`，也可通过 `ANDROID_HOME` 指定。
+
 ```bash
 # Android
 ./gradlew :composeApp:assembleDebug

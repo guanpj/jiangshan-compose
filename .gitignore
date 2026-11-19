@@ -8,5 +8,4 @@
 /.idea/AndroidProjectSystem.xml
 /.kotlin
 /.idea
-/.gradle
-/gradle
+/local.properties
