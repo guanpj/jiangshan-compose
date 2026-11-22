@@ -31,6 +31,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.jiangshan.atlas
+        DEVELOPMENT_TEAM: "82NYF3Z53A"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         FRAMEWORK_SEARCH_PATHS:
           - "$(inherited)"
@@ -43,5 +44,19 @@ targets:
       - name: Compile Kotlin Framework
         basedOnDependencyAnalysis: false
         script: |
+          set -e
           cd "$SRCROOT/.."
-          ./gradlew :composeApp:embedAndSignAppleFrameworkForXcode
+          if [ "${OVERRIDE_KOTLIN_BUILD_IDE_SUPPORTED:-}" = YES ]; then
+            # The IDE builds the framework separately. Xcode still needs the bundled resources.
+            ./gradlew :composeApp:syncComposeResourcesForIos
+          else
+            ./gradlew :composeApp:embedAndSignAppleFrameworkForXcode
+          fi
+
+          atlas="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/compose-resources/composeResources/com.jiangshan.atlas.res/files/atlas"
+          for resource in atlas.json rings.bin settlements.json era_spans.json; do
+            if [ ! -s "$atlas/$resource" ]; then
+              echo "error: Missing Compose resource in the iOS app bundle: $resource"
+              exit 1
+            fi
+          done

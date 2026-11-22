@@ -1,12 +1,12 @@
 package com.jiangshan.atlas
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.contentDescription
+
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.asPaddingValues
@@ -14,27 +14,19 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyRow
 
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
@@ -46,21 +38,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.withContext
 
 internal val Paper = Color(0xFFF3EEE4)
@@ -99,10 +88,12 @@ private fun MapScreen(data: AtlasData, zoomSweep: Boolean = false, zoomFit: Bool
     // cadence (not every frame), so dragging the cursor updates the map without
     // rebuilding it 60 times a second
     LaunchedEffect(Unit) {
-        while (true) {
-            delay(200)
-            if (year != scrubYear) year = scrubYear
-        }
+        snapshotFlow { scrubYear }
+            .conflate()
+            .collect {
+                delay(200)
+                if (year != scrubYear) year = scrubYear
+            }
     }
     val dynasty = remember(year) { data.dynastyFor(year) }
     val snapKey = remember(dynasty, year) { data.snapshotKey(dynasty, year) }
@@ -112,58 +103,43 @@ private fun MapScreen(data: AtlasData, zoomSweep: Boolean = false, zoomFit: Bool
         data.snapshotKey(scrubDynasty, scrubYear)
     }
     val scrubSnap = scrubSnapKey?.let { data.snapshots[it] }
-    var eventsOpen by remember { mutableStateOf(true) }
-    var selection by remember(data, startYear) { mutableStateOf(data.eventAtOrBefore(startYear)) }
-    val eventsDynasty = selection?.dynasty ?: scrubDynasty
-    val selectedIndex = remember(eventsDynasty, selection) {
-        eventsDynasty.events.indexOf(selection?.event)
+    val phase = remember(scrubDynasty, scrubSnap, scrubYear) {
+        phaseLabel(scrubDynasty, scrubSnap?.caption.orEmpty(), scrubYear)
     }
+    val selection = remember(scrubYear) { data.eventAtOrBefore(scrubYear) }
     var focusToken by remember { mutableIntStateOf(0) }
     var mapFocus by remember { mutableStateOf<MapFocus?>(null) }
     val onTimelineYear: (Int) -> Unit = { pickedYear ->
         scrubYear = pickedYear
-        selection = data.eventAtOrBefore(pickedYear)
         mapFocus = null
     }
-    val onEventPick: (AtlasEvent) -> Unit = { event ->
-        selection = EventSelection(eventsDynasty, event)
-        focusToken += 1
-        val coords = event.allCoords
-        mapFocus = if (coords.isNotEmpty()) {
-            MapFocus(focusToken, coords)
-        } else {
-            null
-        }
-        scrubYear = event.year
-        year = event.year
+    val timelineState = remember(data, startYear, timelineSpan) {
+        HorizontalTimelineState(
+            data.dynasties.first().from,
+            data.dynasties.last().to,
+            focusYear = startYear,
+            initialSpan = timelineSpan,
+        )
     }
-
-    // hoisted so portrait <-> landscape keeps the same ruler and event list state
-    val timelineState = remember { TimelineState() }
-    val panelListState = rememberLazyListState()
-    val drawerListState = rememberLazyListState()
+    val selectEventYear: (Int) -> Unit = { targetYear ->
+        scrubYear = targetYear
+        timelineState.include(targetYear)
+        val picked = data.eventAtOrBefore(targetYear)?.event
+        if (picked != null && picked.allCoords.isNotEmpty()) {
+            focusToken++
+            mapFocus = MapFocus(focusToken, picked.allCoords)
+        }
+    }
 
     val safe = WindowInsets.safeDrawing.asPaddingValues()
     val direction = LocalLayoutDirection.current
     val leftInset = safe.calculateLeftPadding(direction)
     val rightInset = safe.calculateRightPadding(direction)
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-    val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val bottomInset = safe.calculateBottomPadding()
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val portrait = maxHeight >= maxWidth
-        val headerH = if (portrait) 76.dp else 44.dp
-
-        if (eventsOpen) {
-            FollowSelectedEvent(
-                listState = if (portrait) panelListState else drawerListState,
-                dynastyKey = eventsDynasty.key,
-                selectedIndex = selectedIndex,
-                pickToken = focusToken,
-                estimatedSize = if (portrait) 212.dp else 64.dp,
-            )
-        }
-
         AtlasMap(
             data = data,
             snap = snap,
@@ -175,387 +151,153 @@ private fun MapScreen(data: AtlasData, zoomSweep: Boolean = false, zoomFit: Bool
             focus = mapFocus,
         )
 
-        Column(
-            Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth()
-                .background(Paper)
-                .statusBarsPadding()
-                .padding(start = 16.dp + leftInset, end = 16.dp + rightInset)
-                .height(headerH)
-                .padding(top = 4.dp),
-            verticalArrangement = Arrangement.Top,
+        Row(
+            Modifier.align(Alignment.TopEnd).statusBarsPadding()
+                .padding(start = leftInset + 20.dp, end = rightInset + 20.dp, top = 12.dp)
+                .then(if (portrait) Modifier.fillMaxWidth() else Modifier.width(320.dp)),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            val titleStyle = TextStyle(
-                color = Ink,
-                fontSize = 19.sp,
-                fontWeight = FontWeight.Bold,
-                fontFamily = FontFamily.Serif,
-            )
-            val captionStyle = TextStyle(
-                color = Muted,
-                fontSize = 10.5.sp,
-                fontFamily = FontFamily.Serif,
-                lineHeight = 14.sp,
-            )
-            val caption = scrubSnap?.caption.orEmpty()
-            if (portrait) {
-                BasicText(
-                    "${scrubDynasty.title} · ${formatYear(scrubYear)}",
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = titleStyle,
-                )
-                if (caption.isNotEmpty()) {
-                    BasicText(
-                        caption,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        style = captionStyle,
-                    )
-                }
-            } else {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    BasicText(
-                        "${scrubDynasty.title} · ${formatYear(scrubYear)}",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = titleStyle,
-                    )
-                    if (caption.isNotEmpty()) {
-                        Spacer(Modifier.width(10.dp))
-                        BasicText(
-                            caption,
-                            modifier = Modifier.weight(1f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            style = captionStyle.copy(fontSize = 11.sp),
-                        )
+            Box(
+                Modifier.weight(1f).height(44.dp).background(CardPaper, RoundedCornerShape(50))
+                    .padding(horizontal = 14.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                BasicText("⌕  搜人物 · 地名 · 年号", style = TextStyle(color = Muted, fontSize = 12.sp))
+            }
+            Box(
+                Modifier.size(44.dp).background(CardPaper, RoundedCornerShape(14.dp))
+                    .semantics { contentDescription = "图层" },
+                contentAlignment = Alignment.Center,
+            ) {
+                Canvas(Modifier.size(18.dp)) {
+                    for (layer in 0..2) {
+                        val y = size.height * (0.26f + layer * 0.17f)
+                        val path = Path().apply {
+                            moveTo(size.width * .12f, y)
+                            lineTo(size.width * .50f, y + size.height * .21f)
+                            lineTo(size.width * .88f, y)
+                            if (layer == 0) {
+                                lineTo(size.width * .50f, y - size.height * .21f)
+                                close()
+                            }
+                        }
+                        drawPath(path, Ink, style = Stroke(1.2.dp.toPx()))
                     }
                 }
             }
         }
 
-        if (portrait) {
-            Box(
-                Modifier
-                    .align(Alignment.CenterStart)
-                    .padding(
-                        start = leftInset + 6.dp,
-                        top = statusTop + headerH + 6.dp,
-                        bottom = navBottom + if (eventsOpen) 132.dp else 46.dp,
-                    ),
-            ) {
-                Timeline(
-                    data = data,
-                    year = scrubYear,
-                    debugSpan = timelineSpan,
-                    modifier = Modifier.fillMaxHeight().shadow(10.dp, RoundedCornerShape(18.dp)),
-                    state = timelineState,
-                    onYear = onTimelineYear,
-                )
-            }
-
-            if (eventsOpen) {
-                EventPanel(
-                    dynasty = eventsDynasty,
-                    selected = selection?.event,
-                    listState = panelListState,
-                    onToggle = { eventsOpen = false },
-                    onPick = onEventPick,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(
-                            start = leftInset + 6.dp,
-                            end = rightInset + 6.dp,
-                            bottom = navBottom + 4.dp,
-                        ),
-                )
-            } else {
-                Box(
-                    Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = navBottom + 4.dp),
-                ) {
-                    EventPill(onOpen = { eventsOpen = true })
+        val era = remember(scrubYear) { data.eraFor(scrubYear, scrubDynasty) }
+        val event = selection?.event
+        val onFocusEvent = event?.takeIf { it.allCoords.isNotEmpty() }?.let { selected ->
+            {
+                if (scrubYear != selected.year) {
+                    scrubYear = selected.year
+                    timelineState.include(selected.year)
                 }
+                focusToken++
+                mapFocus = MapFocus(focusToken, selected.allCoords)
             }
-        } else {
-            Box(
-                Modifier
-                    .align(Alignment.CenterEnd)
-                    .padding(
-                        end = rightInset + 6.dp,
-                        top = statusTop + headerH + 6.dp,
-                        bottom = navBottom + 8.dp,
-                    ),
-            ) {
-                Timeline(
-                    data = data,
-                    year = scrubYear,
-                    debugSpan = timelineSpan,
-                    modifier = Modifier.fillMaxHeight().shadow(10.dp, RoundedCornerShape(18.dp)),
-                    state = timelineState,
-                    onYear = onTimelineYear,
-                )
-            }
+        }
 
-            AnimatedVisibility(
-                visible = eventsOpen,
-                enter = slideInHorizontally(initialOffsetX = { -it }) + fadeIn(),
-                exit = slideOutHorizontally(targetOffsetX = { -it }) + fadeOut(),
-                modifier = Modifier.align(Alignment.CenterStart),
+        if (!portrait) {
+            Column(
+                Modifier.align(Alignment.TopStart)
+                    .padding(start = leftInset + 20.dp, top = statusTop + 12.dp)
+                    .width(300.dp)
+                    .background(CardPaper, RoundedCornerShape(14.dp))
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                EventDrawer(
-                    dynasty = eventsDynasty,
-                    selected = selection?.event,
-                    listState = drawerListState,
-                    onToggle = { eventsOpen = false },
-                    onPick = onEventPick,
-                    modifier = Modifier
-                        .padding(
-                            start = leftInset + 6.dp,
-                            top = statusTop + headerH + 8.dp,
-                            bottom = navBottom + 8.dp,
+                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.Bottom,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        BasicText(
+                            scrubDynasty.title,
+                            modifier = Modifier.weight(1f, fill = false),
+                            style = YearStyle.copy(color = Vermilion, fontSize = 26.sp),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
-                        .fillMaxHeight()
-                        .width(260.dp),
-                )
+                        BasicText(
+                            "·",
+                            style = YearStyle.copy(color = Muted, fontSize = 26.sp),
+                        )
+                        BasicText(axisYear(scrubYear), style = YearStyle.copy(fontSize = 26.sp))
+                    }
+                    BasicText(era?.inline.orEmpty(), style = DetailStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Box(Modifier.fillMaxWidth().height(1.dp).background(PanelRule))
+                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    BasicText(phase.period, style = DetailStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    BasicText(phase.caption, style = DetailStyle, minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+                Box(Modifier.fillMaxWidth().height(1.dp).background(PanelRule))
+                EventHeadline(event, onFocusEvent, minLines = 2)
             }
+        }
 
-            AnimatedVisibility(
-                visible = !eventsOpen,
-                enter = fadeIn(),
-                exit = fadeOut(),
-                modifier = Modifier.align(Alignment.TopStart),
-            ) {
-                EventCornerTab(
-                    onOpen = { eventsOpen = true },
-                    modifier = Modifier.padding(
-                        start = 16.dp,
-                        top = statusTop + headerH + 4.dp,
-                    ),
-                )
-            }
+        Box(
+            Modifier.align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(if (portrait) Color.Transparent else Paper),
+        ) {
+            HorizontalTimeline(
+                data = data,
+                year = scrubYear,
+                dynastyTitle = scrubDynasty.title,
+                state = timelineState,
+                onYear = onTimelineYear,
+                onEventYear = selectEventYear,
+                portrait = portrait,
+                era = era,
+                period = phase.period,
+                caption = phase.caption,
+                event = event,
+                onFocusEvent = onFocusEvent,
+                bottomInset = bottomInset,
+                modifier = Modifier
+                    .padding(start = leftInset, end = rightInset)
+                    .fillMaxWidth(),
+            )
         }
     }
 }
 
-@Composable
-private fun FollowSelectedEvent(
-    listState: LazyListState,
-    dynastyKey: String,
-    selectedIndex: Int,
-    pickToken: Int,
-    estimatedSize: Dp,
-) {
-    val estimatedPx = with(LocalDensity.current) { estimatedSize.roundToPx() }
-    LaunchedEffect(listState, dynastyKey, selectedIndex, pickToken, estimatedPx) {
-        if (selectedIndex < 0) {
-            listState.scrollToItem(0)
-            return@LaunchedEffect
-        }
-        val layout = snapshotFlow { listState.layoutInfo }.first {
-            it.totalItemsCount > selectedIndex && it.viewportEndOffset > it.viewportStartOffset
-        }
-        val itemSize = layout.visibleItemsInfo.firstOrNull { it.index == selectedIndex }?.size ?: estimatedPx
-        val centeredOffset = (layout.viewportStartOffset + layout.viewportEndOffset - itemSize) / 2
-        listState.animateScrollToItem(selectedIndex, -centeredOffset)
-    }
-}
+internal val PanelRule = Ink.copy(alpha = 0.14f)
+internal val CardPaper = Color(0xFFFBF7EE)
+internal val YearStyle = TextStyle(color = Ink, fontSize = 23.sp, fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold)
+internal val DetailStyle = TextStyle(color = Muted, fontSize = 11.sp, lineHeight = 15.sp)
 
 @Composable
-private fun EventPanel(
-    dynasty: Dynasty,
-    selected: AtlasEvent?,
-    listState: LazyListState,
-    onToggle: () -> Unit,
-    onPick: (AtlasEvent) -> Unit,
+internal fun EventHeadline(
+    event: AtlasEvent?,
+    onFocus: (() -> Unit)?,
     modifier: Modifier = Modifier,
+    minLines: Int = 1,
 ) {
-    Column(
+    val headline = event?.headline.orEmpty()
+    if (headline.isBlank() && minLines == 1) return
+    val minHeight = with(LocalDensity.current) {
+        (DetailStyle.lineHeight.value * minLines).sp.toDp()
+    }
+    Box(
         modifier
-            .shadow(10.dp, RoundedCornerShape(12.dp))
-            .background(Color(0xF2F3EEE4), RoundedCornerShape(12.dp))
-            .border(0.8.dp, Color(0x2E2B2622), RoundedCornerShape(12.dp))
-            .fillMaxWidth(),
+            .heightIn(min = minHeight)
+            .then(if (onFocus != null) Modifier.clickable(onClick = onFocus) else Modifier),
+        contentAlignment = Alignment.CenterStart,
     ) {
-        Row(
-            Modifier.fillMaxWidth().height(26.dp).clickable { onToggle() },
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        if (headline.isNotBlank()) {
             BasicText(
-                "史事  ▾",
-                style = TextStyle(fontSize = 11.sp, color = Muted, fontFamily = FontFamily.Serif),
+                headline,
+                style = DetailStyle.copy(color = Ink),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
             )
         }
-        LazyRow(
-            state = listState,
-            modifier = Modifier.fillMaxWidth().height(84.dp),
-            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 2.dp, bottom = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            items(dynasty.events) { e ->
-                val isSelected = e === selected
-                Column(
-                    Modifier
-                        .width(212.dp)
-                        .background(
-                            if (isSelected) Color(0xFFFAEBD0) else Color(0xFFF7F2E7),
-                            RoundedCornerShape(10.dp),
-                        )
-                        .border(
-                            if (isSelected) 1.5.dp else 0.8.dp,
-                            if (isSelected) Color(0xB3B5452F) else Color(0x222B2622),
-                            RoundedCornerShape(10.dp),
-                        )
-                        .semantics { this.selected = isSelected }
-                        .clickable { onPick(e) }
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    BasicText(
-                        "${formatYear(e.year)} · ${e.site}",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = TextStyle(fontSize = 10.sp, color = Muted, fontFamily = FontFamily.Serif),
-                    )
-                    BasicText(
-                        e.headline,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        style = TextStyle(
-                            fontSize = 12.5.sp,
-                            color = Ink,
-                            fontFamily = FontFamily.Serif,
-                            lineHeight = 16.sp,
-                        ),
-                    )
-                }
-            }
-        }
     }
 }
 
-@Composable
-private fun EventPill(onOpen: () -> Unit) {
-    Row(
-        Modifier
-            .shadow(10.dp, RoundedCornerShape(12.dp))
-            .background(Color(0xF2F3EEE4), RoundedCornerShape(12.dp))
-            .border(0.8.dp, Color(0x2E2B2622), RoundedCornerShape(12.dp))
-            .clickable { onOpen() }
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.Center,
-    ) {
-        BasicText(
-            "史事  ▴",
-            style = TextStyle(fontSize = 11.sp, color = Muted, fontFamily = FontFamily.Serif),
-        )
-    }
-}
-
-@Composable
-private fun EventDrawer(
-    dynasty: Dynasty,
-    selected: AtlasEvent?,
-    listState: LazyListState,
-    onToggle: () -> Unit,
-    onPick: (AtlasEvent) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier
-            .shadow(12.dp, RoundedCornerShape(16.dp))
-            .background(Color(0xF7F3EEE4), RoundedCornerShape(16.dp))
-            .border(0.8.dp, Color(0x1F2B2622), RoundedCornerShape(16.dp)),
-    ) {
-        Row(
-            Modifier.fillMaxWidth().height(30.dp).clickable { onToggle() },
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            BasicText(
-                "史事  ◂",
-                style = TextStyle(fontSize = 11.sp, color = Muted, fontFamily = FontFamily.Serif),
-            )
-        }
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxWidth().weight(1f),
-            contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = 2.dp, bottom = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            items(dynasty.events) { e ->
-                val isSelected = e === selected
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .background(
-                            if (isSelected) Color(0xFFFAEBD0) else Color(0xFFF7F2E7),
-                            RoundedCornerShape(10.dp),
-                        )
-                        .border(
-                            if (isSelected) 1.5.dp else 0.8.dp,
-                            if (isSelected) Color(0xB3B5452F) else Color(0x222B2622),
-                            RoundedCornerShape(10.dp),
-                        )
-                        .semantics { this.selected = isSelected }
-                        .clickable { onPick(e) }
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    BasicText(
-                        "${formatYear(e.year)} · ${e.site}",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = TextStyle(fontSize = 10.sp, color = Muted, fontFamily = FontFamily.Serif),
-                    )
-                    BasicText(
-                        e.headline,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                        style = TextStyle(
-                            fontSize = 12.sp,
-                            color = Ink,
-                            fontFamily = FontFamily.Serif,
-                            lineHeight = 15.sp,
-                        ),
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun EventCornerTab(onOpen: () -> Unit, modifier: Modifier = Modifier) {
-    Column(
-        modifier
-            .shadow(10.dp, RoundedCornerShape(12.dp))
-            .background(Color(0xF2F3EEE4), RoundedCornerShape(12.dp))
-            .border(0.8.dp, Color(0x1F2B2622), RoundedCornerShape(12.dp))
-            .clickable { onOpen() }
-            .padding(horizontal = 5.dp, vertical = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(1.dp),
-    ) {
-        listOf("史", "事").forEach { ch ->
-            BasicText(
-                ch,
-                style = TextStyle(fontSize = 10.sp, color = Ink, fontFamily = FontFamily.Serif),
-            )
-        }
-        BasicText(
-            "▸",
-            style = TextStyle(fontSize = 9.sp, color = Muted, fontFamily = FontFamily.Serif),
-        )
-    }
-}
-
-internal fun formatYear(year: Int): String =
-    if (year < 0) "公元前${-year}年" else "${year}年"

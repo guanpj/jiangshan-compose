@@ -113,6 +113,7 @@ class AtlasData(
     val hydroRivers: List<HydroRiver>,
     val hydroLakes: List<HydroLake>,
     val hydroLabels: List<HydroLabel>,
+    internal val eraSpans: List<EraSpan> = emptyList(),
 ) {
     private val chronologicalEvents = dynasties.flatMap { dynasty ->
         dynasty.events.map { EventSelection(dynasty, it) }
@@ -134,6 +135,7 @@ class AtlasData(
 
     companion object {
         suspend fun load(): AtlasData {
+            val eraSpans = loadEraSpans()
             val atlas = Json.parseToJsonElement(
                 Res.readBytes("files/atlas/atlas.json").decodeToString()
             ).jsonObject
@@ -296,8 +298,9 @@ class AtlasData(
                 )
             } ?: emptyList()
 
-            return AtlasData(dynasties, snapshots, features, rings, cities, relief,
-                terrainLevels, tileSize, hydroRivers, hydroLakes, hydroLabels)
+            return AtlasData(
+                dynasties, snapshots, features, rings, cities, relief,
+                terrainLevels, tileSize, hydroRivers, hydroLakes, hydroLabels, eraSpans)
         }
 
         private fun JsonObject.str(name: String): String =

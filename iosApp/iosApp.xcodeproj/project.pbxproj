@@ -13,7 +13,7 @@
 
 /* Begin PBXFileReference section */
 		668CECA83ACC03A83C85A623 /* iOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSApp.swift; sourceTree = "<group>"; };
-		86038AE1032E284E79B32AD6 /* iosApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iosApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		86038AE1032E284E79B32AD6 /* iosApp.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = iosApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C117AD187833E2513BD2F553 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		F543015C899423D4B01CEB2E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -75,6 +75,11 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					78B53CC79860CBFC2F5543C6 = {
+						DevelopmentTeam = 82NYF3Z53A;
+					};
+				};
 			};
 			buildConfigurationList = FF7CA1CA754D017066F1822F /* Build configuration list for PBXProject "iosApp" */;
 			developmentRegion = en;
@@ -124,7 +129,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "if [ \"YES\" = \"$OVERRIDE_KOTLIN_BUILD_IDE_SUPPORTED\" ]; then\n  echo \"Skipping Gradle build task invocation due to OVERRIDE_KOTLIN_BUILD_IDE_SUPPORTED environment variable set to \\\"YES\\\"\"\n  exit 0\nfi\ncd \"$SRCROOT/..\"\n./gradlew :composeApp:embedAndSignAppleFrameworkForXcode";
+			shellScript = "if [ \"YES\" = \"$OVERRIDE_KOTLIN_BUILD_IDE_SUPPORTED\" ]; then\n  echo \"Skipping Gradle build task invocation due to OVERRIDE_KOTLIN_BUILD_IDE_SUPPORTED environment variable set to \\\"YES\\\"\"\n  exit 0\nfi\nset -e\ncd \"$SRCROOT/..\"\nif [ \"${OVERRIDE_KOTLIN_BUILD_IDE_SUPPORTED:-}\" = YES ]; then\n  # The IDE builds the framework separately. Xcode still needs the bundled resources.\n  ./gradlew :composeApp:syncComposeResourcesForIos\nelse\n  ./gradlew :composeApp:embedAndSignAppleFrameworkForXcode\nfi\n\natlas=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/compose-resources/composeResources/com.jiangshan.atlas.res/files/atlas\"\nfor resource in atlas.json rings.bin settlements.json era_spans.json; do\n  if [ ! -s \"$atlas/$resource\" ]; then\n    echo \"error: Missing Compose resource in the iOS app bundle: $resource\"\n    exit 1\n  fi\ndone";
 		};
 /* End PBXShellScriptBuildPhase section */
 

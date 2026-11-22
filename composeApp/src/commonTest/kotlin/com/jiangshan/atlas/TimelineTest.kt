@@ -7,53 +7,9 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class TimelineTest {
-    private val dynasties = listOf(
-        dynasty(-403, -221),
-        dynasty(-221, 25),
-        dynasty(25, 316),
-        dynasty(317, 618),
-        dynasty(618, 907),
-        dynasty(907, 2027),
-    )
-    private val top = 14f
-    private val bottom = 438f
-    private val fit = (bottom - top) / (yearIndex(2027) - yearIndex(-403))
-
-    @Test
-    fun timelineRoundTripsEveryYearWithoutYearZero() {
-        for (zoom in listOf(1f, 2f, 24f)) {
-            val layout = layout(zoom)
-            for (year in (-403..2027).filter { it != 0 }) {
-                assertEquals(year, layout.yearAt(layout.yOf(year)), "year $year at zoom $zoom")
-            }
-            val gap = layout.yOf(1) - layout.yOf(-1)
-            assertEquals(fit * zoom, gap, 0.001f)
-            for (step in 0..10) {
-                val year = layout.yearAt(layout.yOf(-1) + gap * step / 10)
-                assertTrue(year == -1 || year == 1)
-            }
-        }
-    }
-
-    @Test
-    fun zoomAndPanLimitsPreserveTheYearUnderTheCursor() {
-        val state = TimelineState()
-        val overview = layout(1f)
-        val zoomed = layout(2f)
-        val year = 741
-        val anchor = overview.yOf(year)
-        state.placeYear(zoomed, year, anchor, top, bottom)
-        assertEquals(anchor, state.cursorY(top, bottom), 0.001f)
-        assertEquals(year, zoomed.yearAt(state.scrollOffset + state.cursorY(top, bottom)))
-
-        state.placeYear(overview, year, top, top, bottom)
-        assertEquals(0f, state.scrollOffset, 0.001f)
-        assertEquals(year, overview.yearAt(state.scrollOffset + state.cursorY(top, bottom)))
-    }
-
     @Test
     fun invalidInitialYearFallsBackToTheFirstDynastyFocus() {
-        val data = atlas(dynasties)
+        val data = atlas(listOf(dynasty(-403, 2027)))
         for (year in listOf(Int.MIN_VALUE, -404, 0, 2028, Int.MAX_VALUE)) {
             assertEquals(-403, data.initialYear(year))
         }
@@ -85,7 +41,45 @@ class TimelineTest {
         assertSame(firstQingEvent, atlas(listOf(ming, qing)).eventAtOrBefore(1644)?.event)
     }
 
-    private fun layout(zoom: Float): TimelineLayout = buildTimelineLayout(dynasties, fit * zoom, top, 1f)
+    @Test
+    fun rangeSelectionKeepsOrClampsTheCurrentYearAndCanReset() {
+        val state = HorizontalTimelineState(-403, 2027)
+        assertEquals(741, state.applyRange(yearIndex(618), yearIndex(907), 741))
+        assertEquals(618, state.applyRange(yearIndex(618), yearIndex(907), -200))
+        assertEquals(907, state.applyRange(yearIndex(618), yearIndex(907), 1644))
+        assertEquals(618, timelineYear(state.from))
+        assertEquals(907, timelineYear(state.to))
+        state.reset()
+        assertEquals(-403, timelineYear(state.from))
+        assertEquals(2027, timelineYear(state.to))
+    }
+
+    @Test
+    fun selectedRangeSupportsCrossingFromBceToCeWithoutYearZero() {
+        val state = HorizontalTimelineState(-403, 2027)
+        assertEquals(-1, state.applyRange(yearIndex(-1), yearIndex(1), -1))
+        assertEquals(1, timelineYear(state.to))
+        assertEquals(1, state.to - state.from)
+    }
+
+    @Test
+    fun includeKeepsARangeThatContainsTheYearAndResetsOtherwise() {
+        val state = HorizontalTimelineState(-403, 2027)
+        state.applyRange(yearIndex(618), yearIndex(907), 741)
+        state.include(800)
+        assertEquals(618, timelineYear(state.from))
+        assertEquals(907, timelineYear(state.to))
+        state.include(1644)
+        assertEquals(-403, timelineYear(state.from))
+        assertEquals(2027, timelineYear(state.to))
+    }
+
+    @Test
+    fun initialSpanZoomsAroundTheStartingYear() {
+        val state = HorizontalTimelineState(-403, 2027, 741, 150)
+        assertTrue(yearIndex(741) in state.from..state.to)
+        assertEquals(150, state.to - state.from + 1, "a 150-year window includes both endpoints")
+    }
 
     private fun atlas(dynasties: List<Dynasty>) = AtlasData(
         dynasties, emptyMap(), emptyList(), emptyArray(), emptyMap(), null,
