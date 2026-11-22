@@ -129,7 +129,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "if [ \"YES\" = \"$OVERRIDE_KOTLIN_BUILD_IDE_SUPPORTED\" ]; then\n  echo \"Skipping Gradle build task invocation due to OVERRIDE_KOTLIN_BUILD_IDE_SUPPORTED environment variable set to \\\"YES\\\"\"\n  exit 0\nfi\nset -e\ncd \"$SRCROOT/..\"\nif [ \"${OVERRIDE_KOTLIN_BUILD_IDE_SUPPORTED:-}\" = YES ]; then\n  # The IDE builds the framework separately. Xcode still needs the bundled resources.\n  ./gradlew :composeApp:syncComposeResourcesForIos\nelse\n  ./gradlew :composeApp:embedAndSignAppleFrameworkForXcode\nfi\n\natlas=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/compose-resources/composeResources/com.jiangshan.atlas.res/files/atlas\"\nfor resource in atlas.json rings.bin settlements.json era_spans.json; do\n  if [ ! -s \"$atlas/$resource\" ]; then\n    echo \"error: Missing Compose resource in the iOS app bundle: $resource\"\n    exit 1\n  fi\ndone";
+			shellScript = "set -e\ncd \"$SRCROOT/..\"\n# Always build/embed the current Kotlin framework. Running only the\n# resource-sync task leaves an old framework behind when Xcode is\n# driven by an IDE, which makes code changes appear not to take effect.\n./gradlew :composeApp:embedAndSignAppleFrameworkForXcode\n\natlas=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/compose-resources/composeResources/com.jiangshan.atlas.res/files/atlas\"\nfor resource in atlas.json rings.bin settlements.json era_spans.json; do\n  if [ ! -s \"$atlas/$resource\" ]; then\n    echo \"error: Missing Compose resource in the iOS app bundle: $resource\"\n    exit 1\n  fi\ndone\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

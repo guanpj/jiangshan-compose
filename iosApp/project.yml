@@ -46,12 +46,10 @@ targets:
         script: |
           set -e
           cd "$SRCROOT/.."
-          if [ "${OVERRIDE_KOTLIN_BUILD_IDE_SUPPORTED:-}" = YES ]; then
-            # The IDE builds the framework separately. Xcode still needs the bundled resources.
-            ./gradlew :composeApp:syncComposeResourcesForIos
-          else
-            ./gradlew :composeApp:embedAndSignAppleFrameworkForXcode
-          fi
+          # Always build/embed the current Kotlin framework. Running only the
+          # resource-sync task leaves an old framework behind when Xcode is
+          # driven by an IDE, which makes code changes appear not to take effect.
+          ./gradlew :composeApp:embedAndSignAppleFrameworkForXcode
 
           atlas="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/compose-resources/composeResources/com.jiangshan.atlas.res/files/atlas"
           for resource in atlas.json rings.bin settlements.json era_spans.json; do
