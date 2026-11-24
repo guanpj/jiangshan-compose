@@ -7,7 +7,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.contentDescription
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.safeDrawing
@@ -18,6 +20,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.statusBars
@@ -27,26 +31,37 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.conflate
@@ -131,6 +146,49 @@ private fun MapScreen(data: AtlasData, zoomSweep: Boolean = false, zoomFit: Bool
         }
     }
 
+    var layersOpen by rememberSaveable { mutableStateOf(false) }
+    var showPolities by rememberSaveable { mutableStateOf(true) }
+    var showRegions by rememberSaveable { mutableStateOf(true) }
+    var showSettlements by rememberSaveable { mutableStateOf(true) }
+    var showHydro by rememberSaveable { mutableStateOf(true) }
+    var showTerrain by rememberSaveable { mutableStateOf(true) }
+    val mapVisibility = remember(showPolities, showRegions, showSettlements, showHydro, showTerrain) {
+        MapLayerVisibility(
+            polities = showPolities,
+            regions = showRegions,
+            settlements = showSettlements,
+            hydro = showHydro,
+            terrain = showTerrain,
+        )
+    }
+    val mapModifier = remember { Modifier.fillMaxSize() }
+
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var searchFocused by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val searchIndex = remember(data) { data.buildSearchIndex() }
+    fun closeSearch() {
+        searchFocused = false
+        focusManager.clearFocus(force = true)
+        keyboardController?.hide()
+    }
+    val searchHits = remember(searchQuery, searchIndex, scrubYear) {
+        data.searchHits(searchQuery, searchIndex)
+    }
+    fun selectSearchHit(hit: SearchHit) {
+        searchQuery = ""
+        closeSearch()
+        scrubYear = hit.year
+        timelineState.include(hit.year)
+        if (hit.coords.isNotEmpty()) {
+            focusToken++
+            mapFocus = MapFocus(focusToken, hit.coords)
+        } else {
+            mapFocus = null
+        }
+    }
+
     val safe = WindowInsets.safeDrawing.asPaddingValues()
     val direction = LocalLayoutDirection.current
     val leftInset = safe.calculateLeftPadding(direction)
@@ -145,14 +203,16 @@ private fun MapScreen(data: AtlasData, zoomSweep: Boolean = false, zoomFit: Bool
             snap = snap,
             dynasty = dynasty,
             year = year,
-            modifier = Modifier.fillMaxSize(),
+            modifier = mapModifier,
             debugSweep = zoomSweep,
             debugFit = zoomFit,
             focus = mapFocus,
+            visibility = mapVisibility,
         )
 
         Row(
             Modifier.align(Alignment.TopEnd).statusBarsPadding()
+                .zIndex(1f)
                 .padding(start = leftInset + 20.dp, end = rightInset + 20.dp, top = 12.dp)
                 .then(if (portrait) Modifier.fillMaxWidth() else Modifier.width(320.dp)),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -163,10 +223,94 @@ private fun MapScreen(data: AtlasData, zoomSweep: Boolean = false, zoomFit: Bool
                     .padding(horizontal = 14.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {
-                BasicText("⌕  搜人物 · 地名 · 年号", style = TextStyle(color = Muted, fontSize = 12.sp))
+                BasicTextField(
+                    value = searchQuery,
+                    onValueChange = { value ->
+                        searchQuery = value
+                        searchFocused = true
+                        layersOpen = false
+                    },
+                    modifier = Modifier.fillMaxWidth().onFocusChanged { state ->
+                        if (state.isFocused) {
+                            searchFocused = true
+                            layersOpen = false
+                        } else if (!state.isFocused) {
+                            searchFocused = false
+                        }
+                    },
+                    singleLine = true,
+                    textStyle = TextStyle(color = Ink, fontSize = 12.sp),
+                    cursorBrush = SolidColor(Vermilion),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = {
+                        val first = searchHits.firstOrNull()
+                        if (first != null) selectSearchHit(first) else closeSearch()
+                    }),
+                    decorationBox = { inner ->
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Canvas(Modifier.size(18.dp)) {
+                                val stroke = 1.4.dp.toPx()
+                                val center = Offset(size.width * 0.42f, size.height * 0.42f)
+                                val radius = size.minDimension * 0.29f
+                                drawCircle(
+                                    color = Muted,
+                                    radius = radius,
+                                    center = center,
+                                    style = Stroke(stroke),
+                                )
+                                drawLine(
+                                    color = Muted,
+                                    start = Offset(
+                                        center.x + radius * 0.72f,
+                                        center.y + radius * 0.72f,
+                                    ),
+                                    end = Offset(size.width * 0.83f, size.height * 0.83f),
+                                    strokeWidth = stroke * 1.05f,
+                                    cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                                )
+                            }
+                            Box(Modifier.weight(1f)) {
+                                if (searchQuery.isEmpty()) {
+                                    BasicText(
+                                        "搜地名 · 年号 · 史事",
+                                        style = TextStyle(color = Muted, fontSize = 12.sp),
+                                        maxLines = 1,
+                                    )
+                                }
+                                inner()
+                            }
+                            if (searchQuery.isNotEmpty()) {
+                                BasicText(
+                                    "×",
+                                    modifier = Modifier.clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null,
+                                    ) {
+                                        searchQuery = ""
+                                        closeSearch()
+                                    },
+                                    style = TextStyle(color = Muted, fontSize = 14.sp),
+                                )
+                            }
+                        }
+                    },
+                )
             }
             Box(
-                Modifier.size(44.dp).background(CardPaper, RoundedCornerShape(14.dp))
+                Modifier.size(44.dp)
+                    .background(CardPaper, RoundedCornerShape(14.dp))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        role = androidx.compose.ui.semantics.Role.Button,
+                    ) {
+                        closeSearch()
+                        layersOpen = !layersOpen
+                    }
                     .semantics { contentDescription = "图层" },
                 contentAlignment = Alignment.Center,
             ) {
@@ -184,6 +328,113 @@ private fun MapScreen(data: AtlasData, zoomSweep: Boolean = false, zoomFit: Bool
                         }
                         drawPath(path, Ink, style = Stroke(1.2.dp.toPx()))
                     }
+                }
+            }
+        }
+
+        if (searchFocused) {
+            Box(
+                Modifier.fillMaxSize()
+                    .zIndex(0.5f)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) {
+                        closeSearch()
+                    }
+            )
+        }
+        if (searchFocused && searchQuery.isNotBlank()) {
+            val resultWidth = (
+                if (portrait) maxWidth - leftInset - rightInset - 40.dp - 52.dp
+                else 268.dp
+            ).coerceAtLeast(160.dp)
+            Column(
+                Modifier.align(Alignment.TopEnd)
+                    .zIndex(2f)
+                    .padding(end = rightInset + 20.dp + 52.dp, top = statusTop + 64.dp)
+                    .width(resultWidth)
+                    .heightIn(max = 320.dp)
+                    .background(CardPaper, RoundedCornerShape(14.dp))
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                if (searchHits.isEmpty()) {
+                    BasicText(
+                        "未找到匹配的地名、年号或史事",
+                        modifier = Modifier.padding(14.dp),
+                        style = TextStyle(color = Muted, fontSize = 11.sp),
+                    )
+                } else {
+                    searchHits.forEachIndexed { index, hit ->
+                        Column(
+                            Modifier.fillMaxWidth()
+                                .clickable { selectSearchHit(hit) }
+                                .padding(horizontal = 14.dp, vertical = 9.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            BasicText(
+                                hit.title,
+                                style = TextStyle(color = Ink, fontSize = 12.sp, fontWeight = FontWeight.Medium),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            BasicText(
+                                hit.subtitle,
+                                style = TextStyle(color = Muted, fontSize = 10.sp),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        if (index < searchHits.lastIndex) {
+                            Box(Modifier.fillMaxWidth().height(1.dp).background(PanelRule))
+                        }
+                    }
+                }
+            }
+        }
+
+        if (layersOpen) {
+            Box(
+                Modifier.fillMaxSize()
+                    .zIndex(1f)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { layersOpen = false }
+            )
+            Column(
+                Modifier.align(Alignment.TopEnd)
+                    .zIndex(2f)
+                    .padding(end = rightInset + 20.dp, top = statusTop + 64.dp)
+                    .width(246.dp)
+                    .background(CardPaper, RoundedCornerShape(14.dp))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) {}
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                BasicText(
+                    "图层",
+                    style = TextStyle(
+                        color = Ink,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Serif,
+                    ),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    LayerChip("历史疆域", showPolities, Modifier.weight(1f)) { showPolities = it }
+                    LayerChip("州道政区", showRegions, Modifier.weight(1f)) { showRegions = it }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    LayerChip("古地名", showSettlements, Modifier.weight(1f)) { showSettlements = it }
+                    LayerChip("水系", showHydro, Modifier.weight(1f)) { showHydro = it }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    LayerChip("地形", showTerrain, Modifier.weight(1f)) { showTerrain = it }
+                    Box(Modifier.weight(1f))
                 }
             }
         }
@@ -264,6 +515,58 @@ private fun MapScreen(data: AtlasData, zoomSweep: Boolean = false, zoomFit: Bool
                     .fillMaxWidth(),
             )
         }
+    }
+}
+
+@Composable
+private fun LayerChip(
+    label: String,
+    checked: Boolean,
+    modifier: Modifier = Modifier,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier
+            .height(30.dp)
+            .background(
+                if (checked) Ink.copy(alpha = 0.07f) else Color.Transparent,
+                RoundedCornerShape(8.dp),
+            )
+            .clickable { onCheckedChange(!checked) }
+            .padding(horizontal = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        Canvas(Modifier.size(13.dp)) {
+            val stroke = 1.dp.toPx()
+            drawRoundRect(
+                color = if (checked) Vermilion else Muted.copy(alpha = 0.55f),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx()),
+                style = if (checked) androidx.compose.ui.graphics.drawscope.Fill
+                else Stroke(stroke),
+            )
+            if (checked) {
+                drawLine(
+                    Color.White,
+                    Offset(size.width * 0.24f, size.height * 0.52f),
+                    Offset(size.width * 0.44f, size.height * 0.72f),
+                    1.3.dp.toPx(),
+                    androidx.compose.ui.graphics.StrokeCap.Round,
+                )
+                drawLine(
+                    Color.White,
+                    Offset(size.width * 0.44f, size.height * 0.72f),
+                    Offset(size.width * 0.78f, size.height * 0.30f),
+                    1.3.dp.toPx(),
+                    androidx.compose.ui.graphics.StrokeCap.Round,
+                )
+            }
+        }
+        BasicText(
+            label,
+            style = TextStyle(color = if (checked) Ink else Muted, fontSize = 11.sp),
+            maxLines = 1,
+        )
     }
 }
 

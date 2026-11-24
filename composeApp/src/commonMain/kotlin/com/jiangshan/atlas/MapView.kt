@@ -1,5 +1,7 @@
 package com.jiangshan.atlas
 
+import androidx.compose.runtime.Immutable
+
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -117,9 +119,19 @@ private class TileStore(private val scope: CoroutineScope) {
     }
 }
 
+@Immutable
 class MapFocus(
     val token: Int,
     val coords: List<FloatArray>,
+)
+
+@Immutable
+data class MapLayerVisibility(
+    val polities: Boolean = true,
+    val regions: Boolean = true,
+    val settlements: Boolean = true,
+    val hydro: Boolean = true,
+    val terrain: Boolean = true,
 )
 
 @Composable
@@ -132,6 +144,7 @@ fun AtlasMap(
     debugSweep: Boolean = false,
     debugFit: Boolean = false,
     focus: MapFocus? = null,
+    visibility: MapLayerVisibility = MapLayerVisibility(),
 ) {
     val projector = remember { Projector() }
     val layers = remember(snap) { buildLayers(data, snap, projector) }
@@ -263,7 +276,7 @@ fun AtlasMap(
         ) {
             drawRect(Paper)
 
-            data.relief?.let { img ->
+            if (visibility.terrain) data.relief?.let { img ->
                 val left = (-80f - camX) * scale + size.width / 2f
                 val top = (-40f - camY) * scale + size.height / 2f
                 val right = (1080f - camX) * scale + size.width / 2f
@@ -277,35 +290,42 @@ fun AtlasMap(
                 )
             }
 
-            drawTerrainTiles(data, tileStore, projector, scale, camX, camY, tileLevel, tilesOn)
-
-            val cities = data.cities[dynasty.key].orEmpty().filter {
-                (it.appear == null || year >= it.appear) && (it.vanish == null || year < it.vanish)
+            if (visibility.terrain) {
+                drawTerrainTiles(data, tileStore, projector, scale, camX, camY, tileLevel, tilesOn)
             }
+
+            val cities = if (visibility.settlements) data.cities[dynasty.key].orEmpty().filter {
+                (it.appear == null || year >= it.appear) && (it.vanish == null || year < it.vanish)
+            } else emptyList()
 
             withTransform({
                 translate(size.width / 2f - camX * scale, size.height / 2f - camY * scale)
                 scale(scale, scale, Offset.Zero)
             }) {
-                layers.polityPaths.forEachIndexed { i, path ->
-                    drawPath(path, layers.polityFills[i])
-                    drawPath(
-                        path,
-                        layers.polityStrokes[i],
-                        style = Stroke(width = 1.1.dp.toPx() / scale),
-                    )
+                if (visibility.polities) {
+                    layers.polityPaths.forEachIndexed { i, path ->
+                        drawPath(path, layers.polityFills[i])
+                        drawPath(
+                            path,
+                            layers.polityStrokes[i],
+                            style = Stroke(width = 1.1.dp.toPx() / scale),
+                        )
+                    }
                 }
-                val regionColor = Color(0x332B2622)
-                layers.regionPaths.forEach {
-                    drawPath(it, regionColor, style = Stroke(width = 0.8.dp.toPx() / scale))
+                if (visibility.regions) {
+                    val regionColor = Color(0x332B2622)
+                    layers.regionPaths.forEach {
+                        drawPath(it, regionColor, style = Stroke(width = 0.8.dp.toPx() / scale))
+                    }
                 }
-                drawHydro(hydro, scale, year)
+                if (visibility.hydro) drawHydro(hydro, scale, year)
             }
 
             // polity captions (main / rival / protectorate / neighbor), web typography
             val zoomFactor = sqrt((scale / cover).coerceAtLeast(0.25f)).coerceIn(0.85f, 2.8f)
             val placed = ArrayList<Rect>(24)
             snap?.polities?.forEach { idx ->
+                if (!visibility.polities) return@forEach
                 val f = data.features.getOrNull(idx) ?: return@forEach
                 val lon = f.anchorLon ?: return@forEach
                 val lat = f.anchorLat ?: return@forEach
@@ -340,6 +360,7 @@ fun AtlasMap(
 
             // prefecture / commandery captions (郡/州/府/路)
             snap?.regions?.forEach { idx ->
+                if (!visibility.regions) return@forEach
                 val f = data.features.getOrNull(idx) ?: return@forEach
                 if (f.title.isBlank()) return@forEach
                 val lon = f.anchorLon ?: return@forEach
@@ -371,6 +392,7 @@ fun AtlasMap(
             // water / mountain captions (lowest priority: cities never yield to them)
             val hydroPlaced = ArrayList<Rect>(placed)
             hydro.labels.forEach { lb ->
+                if (!visibility.hydro) return@forEach
                 val wx = projector.x(lb.lon.toDouble())
                 val wy = projector.y(lb.lat.toDouble())
                 val sx = (wx - camX) * scale + size.width / 2f

@@ -1,5 +1,7 @@
 package com.jiangshan.atlas
 
+import androidx.compose.runtime.Immutable
+
 import androidx.compose.ui.graphics.ImageBitmap
 import com.jiangshan.atlas.res.Res
 import kotlinx.serialization.json.Json
@@ -30,6 +32,7 @@ class AtlasEvent(
         else if (hasCoord) listOf(floatArrayOf(lon, lat)) else emptyList()
 }
 
+@Immutable
 class Dynasty(
     val key: String,
     val title: String,
@@ -83,6 +86,7 @@ class HydroLabel(
     val rot: Float,
 )
 
+@Immutable
 class Snapshot(
     val polities: IntArray,
     val regions: IntArray,
@@ -101,6 +105,7 @@ class City(
     val capitalPeriods: List<IntArray> = emptyList(),
 )
 
+@Immutable
 class AtlasData(
     val dynasties: List<Dynasty>,
     val snapshots: Map<String, Snapshot>,
